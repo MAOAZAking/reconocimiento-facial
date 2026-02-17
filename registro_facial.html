@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Registro Facial</title>
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+    <style>
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; background-color: #f0f0f0; }
+        #container { text-align: center; padding: 20px; border: 1px solid #ccc; border-radius: 10px; background-color: white; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        #imageContainer {
+            position: relative;
+            margin-top: 20px;
+            min-height: 250px;
+            width: 100%;
+            max-width: 500px;
+            margin-left: auto;
+            margin-right: auto;
+            background-color: #f0f0f0;
+            border: 1px solid #ccc;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        #imageContainer::before { content: 'Vista Previa'; color: #aaa; font-size: 1.2rem; font-weight: bold; }
+        #imageContainer.has-content::before { display: none; }
+        #imageContainer img, #imageContainer video { max-width: 100%; height: auto; display: none; }
+        #imageContainer video { transform: scaleX(-1); } /* Mirror effect for camera */
+        #imageContainer canvas { position: absolute; top: 0; left: 0; }
+        #status { margin-top: 15px; font-weight: bold; }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; margin: 0 5px; }
+        #linkProtegido { display: none; margin-top: 20px; font-size: 18px; }
+        #action-buttons, #camera-controls { margin-top: 15px; }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <h1>Paso 1: Registrar un rostro</h1>
+        <p>Sube una foto clara o usa tu cámara para registrar a la persona autorizada.</p>
+        <div id="action-buttons">
+            <button onclick="document.getElementById('imageUpload').click()">Subir Archivo</button>
+            <button id="start-camera" onclick="startCamera()">Usar Cámara</button>
+        </div>
+        <input type="file" id="imageUpload" accept="image/*" style="display:none">
+        <div id="imageContainer">
+            <video id="video" autoplay muted playsinline></video>
+            <img id="imagePreview" src="" alt="Vista previa de la imagen">
+            <canvas id="canvas"></canvas>
+        </div>
+        <p id="status">Cargando modelos de IA...</p>
+        <div id="camera-controls" style="display: none;">
+            <button onclick="takePicture()">Tomar Foto</button>
+            <button onclick="cancelCamera()">Cancelar</button>
+        </div>
+        <button id="registerButton" style="display: none;" onclick="confirmarRegistro()">Confirmar Registro</button>
+        <a id="linkProtegido" href="contenido_protegido.html">Acceder al contenido protegido</a>
+    </div>
+
+    <script>
+        const imageUpload = document.getElementById('imageUpload');
+        const imageContainer = document.getElementById('imageContainer');
+        const imagePreview = document.getElementById('imagePreview');
+        const video = document.getElementById('video');
+        const statusEl = document.getElementById('status');
+        const registerButton = document.getElementById('registerButton');
+        const linkProtegido = document.getElementById('linkProtegido');
+        const actionButtons = document.getElementById('action-buttons');
+        const cameraControls = document.getElementById('camera-controls');
+        const MODEL_URL = './models';
+        let stream = null;
+
+        async function loadModels() {
+            try {
+                await faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL);
+                await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+                await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
+                statusEl.innerText = 'Modelos cargados. Sube una imagen o usa la cámara.';
+            } catch (error) {
+                console.error(error);
+                statusEl.innerText = 'Error al cargar los modelos.';
+            }
+        }
+
+        loadModels();
+
+        async function analyzeImage(imageElement) {
+            statusEl.innerText = 'Analizando imagen...';
+            const detection = await faceapi.detectSingleFace(imageElement).withFaceLandmarks().withFaceDescriptor();
+
+            if (!detection) {
+                statusEl.innerText = 'No se detectó un rostro. Intenta con otra imagen o foto.';
+                actionButtons.style.display = 'block';
+                imageContainer.classList.remove('has-content');
+                imageElement.style.display = 'none';
+                return;
+            }
+
+            sessionStorage.setItem('authorizedFace', JSON.stringify(detection.descriptor));
+            statusEl.innerText = 'Rostro detectado. ¡Listo para registrar!';
+            registerButton.style.display = 'inline-block';
+            actionButtons.style.display = 'none';
+        }
+
+        imageUpload.addEventListener('change', async () => {
+            if (imageUpload.files.length === 0) return;
+            const file = imageUpload.files[0];
+
+            imagePreview.src = URL.createObjectURL(file);
+            imagePreview.style.display = 'block';
+            video.style.display = 'none';
+            imageContainer.classList.add('has-content');
+
+            linkProtegido.style.display = 'none';
+            registerButton.style.display = 'none';
+
+            imagePreview.onload = async () => {
+                analyzeImage(imagePreview);
+                URL.revokeObjectURL(imagePreview.src);
+            };
+        });
+
+        async function startCamera() {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                video.srcObject = stream;
+                video.style.display = 'block';
+                imagePreview.style.display = 'none';
+                
+                imageContainer.classList.add('has-content');
+                actionButtons.style.display = 'none';
+                cameraControls.style.display = 'block';
+                statusEl.innerText = 'Posiciona el rostro y toma la foto.';
+                
+                registerButton.style.display = 'none';
+                linkProtegido.style.display = 'none';
+            } catch (err) {
+                console.error("Error al acceder a la cámara: ", err);
+                statusEl.innerText = 'No se pudo acceder a la cámara.';
+            }
+        }
+
+        function cancelCamera() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+            video.style.display = 'none';
+            video.srcObject = null;
+            
+            imageContainer.classList.remove('has-content');
+            actionButtons.style.display = 'block';
+            cameraControls.style.display = 'none';
+            statusEl.innerText = 'Modelos cargados. Sube una imagen o usa la cámara.';
+        }
+
+        async function takePicture() {
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = video.videoWidth;
+            tempCanvas.height = video.videoHeight;
+            const context = tempCanvas.getContext('2d');
+            context.drawImage(video, 0, 0, tempCanvas.width, tempCanvas.height);
+
+            cancelCamera();
+
+            imagePreview.src = tempCanvas.toDataURL('image/jpeg');
+            imagePreview.style.display = 'block';
+            imageContainer.classList.add('has-content');
+            
+            imagePreview.onload = () => analyzeImage(imagePreview);
+            if (imagePreview.complete) analyzeImage(imagePreview);
+        }
+
+        function confirmarRegistro() {
+            statusEl.innerText = '¡Rostro registrado con éxito!';
+            registerButton.style.display = 'none';
+            actionButtons.style.display = 'none';
+            linkProtegido.style.display = 'block';
+        }
+    </script>
+</body>
+</html>
