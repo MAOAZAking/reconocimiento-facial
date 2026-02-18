@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Entrenamiento de Reconocimiento</title>
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+    <style>
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; }
+        #container { max-width: 800px; text-align: center; }
+        #imageContainer { position: relative; margin-top: 20px; min-height: 200px; border: 2px dashed #ccc; }
+        #imageContainer img, #imageContainer canvas { max-width: 100%; height: auto; }
+        #imageContainer canvas { position: absolute; top: 0; left: 0; }
+        #status { margin: 15px 0; font-weight: bold; font-size: 1.2em; }
+        #controls button { padding: 10px 20px; font-size: 16px; cursor: pointer; margin: 5px; }
+        #modal { display: none; position: fixed; z-index: 1; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.6); justify-content: center; align-items: center; }
+        #modal-content { background-color: #fefefe; margin: auto; padding: 20px; border: 1px solid #888; width: 80%; max-width: 400px; text-align: center; }
+        #face-preview { max-width: 150px; height: auto; margin-bottom: 15px; }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <h1>Fase 1: Entrenamiento Interactivo</h1>
+        <p>Sube una foto de la carpeta <strong>fotos_limpias</strong>. El sistema detectará los rostros y te pedirá que los clasifiques.</p>
+        <div id="controls">
+            <!-- El proceso comenzará automáticamente -->
+            <button id="saveButton" disabled>Guardar Conocimiento (JSON)</button>
+        </div>
+        <div id="status">Cargando modelos de IA...</div>
+        <div id="imageContainer">
+            <img id="imagePreview" />
+            <canvas id="canvas"></canvas>
+        </div>
+    </div>
+
+    <!-- Modal para etiquetar -->
+    <div id="modal">
+        <div id="modal-content">
+            <h2>¿Qué rostro es este?</h2>
+            <canvas id="face-preview"></canvas>
+            <p>Por favor, clasifica el rostro.</p>
+            <button id="btn-nino">Niño</button>
+            <button id="btn-adulto">Adulto</button>
+            <button id="btn-ignorar">Ignorar</button>
+        </div>
+    </div>
+
+    <script>
+        const imagePreview = document.getElementById('imagePreview');
+        const imageContainer = document.getElementById('imageContainer');
+        const canvas = document.getElementById('canvas');
+        const statusEl = document.getElementById('status');
+        const saveButton = document.getElementById('saveButton');
+        const modal = document.getElementById('modal');
+        const facePreview = document.getElementById('face-preview');
+
+        const MODEL_URL = 'models';
+        let descriptorsByLabel = {}; // Objeto para agrupar descriptores por etiqueta
+
+        async function loadModels() {
+            try {
+                await Promise.all([
+                    faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
+                    faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+                    faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+                ]);
+                statusEl.innerText = 'Modelos cargados. Iniciando proceso de entrenamiento...';
+                startTrainingProcess(); // Iniciar automáticamente
+            } catch (error) {
+                console.error(error);
+                statusEl.innerText = 'Error al cargar los modelos.';
+            }
+        }
+
+        async function startTrainingProcess() {
+            try {
+                const response = await fetch('fotos_limpias/file_list.json');
+                if (!response.ok) {
+                    throw new Error('No se pudo encontrar file_list.json. Asegúrate de ejecutar primero el script de Python.');
+                }
+                const files = await response.json();
+                if (files.length === 0) {
+                    statusEl.innerText = 'No se encontraron imágenes en la lista. Revisa la carpeta fotos_limpias y vuelve a ejecutar el script.';
+                    return;
+                }
+
+                saveButton.disabled = true;
+
+                for (let i = 0; i < files.length; i++) {
+                    const filename = files[i];
+                    statusEl.innerText = `Procesando imagen ${i + 1} de ${files.length}: ${filename}`;
+                    
+                    await new Promise((resolve) => { // No usamos reject para no detener el bucle
+                        imagePreview.src = `fotos_limpias/${filename}`; // Construir la ruta a la imagen
+                        imagePreview.onload = async () => {
+                            const detections = await faceapi.detectAllFaces(imagePreview)
+                                .withFaceLandmarks()
+                                .withFaceDescriptors();
+
+                            if (detections.length > 0) {
+                                faceapi.matchDimensions(canvas, imagePreview);
+                                const resizedDetections = faceapi.resizeResults(detections, imagePreview);
+                                faceapi.draw.drawDetections(canvas, resizedDetections);
+
+                                for (let j = 0; j < detections.length; j++) {
+                                    const detection = detections[j];
+                                    const label = await askForLabel(detection.detection.box);
+                                    if (label) { // Si es 'niño' o 'adulto'
+                                        if (!descriptorsByLabel[label]) {
+                                            descriptorsByLabel[label] = [];
+                                        }
+                                        descriptorsByLabel[label].push(detection.descriptor);
+                                        
+                                        const drawBox = new faceapi.draw.DrawBox(detection.detection.box, { label });
+                                        drawBox.draw(canvas);
+                                    }
+                                }
+                            }
+                            resolve();
+                        };
+                        imagePreview.onerror = () => {
+                            console.error(`Error: No se pudo cargar la imagen '${filename}'. Saltando a la siguiente.`);
+                            resolve(); // Resolvemos para que el bucle continúe con la siguiente imagen
+                        };
+                    });
+                }
+
+                const totalFaces = Object.values(descriptorsByLabel).reduce((acc, arr) => acc + arr.length, 0);
+                statusEl.innerText = `Procesamiento de ${files.length} imagen(es) completo. Total de rostros en memoria: ${totalFaces}.`;
+                if (totalFaces > 0) {
+                    saveButton.disabled = false;
+                }
+            } catch (error) {
+                console.error(error);
+                statusEl.innerText = error.message;
+            }
+        }
+
+        loadModels();
+
+        function askForLabel(box) {
+            return new Promise(resolve => {
+                // Extraer el rostro a un canvas preview
+                const faceCanvas = facePreview;
+                const faceCtx = faceCanvas.getContext('2d');
+                const { x, y, width, height } = box;
+                faceCanvas.width = width;
+                faceCanvas.height = height;
+                faceCtx.drawImage(imagePreview, x, y, width, height, 0, 0, width, height);
+
+                modal.style.display = 'flex';
+
+                document.getElementById('btn-nino').onclick = () => { modal.style.display = 'none'; resolve('niño'); };
+                document.getElementById('btn-adulto').onclick = () => { modal.style.display = 'none'; resolve('adulto'); };
+                document.getElementById('btn-ignorar').onclick = () => { modal.style.display = 'none'; resolve(null); };
+            });
+        }
+
+        saveButton.addEventListener('click', () => {
+            const totalFaces = Object.values(descriptorsByLabel).reduce((acc, arr) => acc + arr.length, 0);
+            if (totalFaces === 0) {
+                alert('No hay rostros etiquetados para guardar.');
+                return;
+            }
+
+            // Creamos la estructura final agrupando los descriptores por etiqueta
+            const dataToSave = Object.keys(descriptorsByLabel).map(label => ({
+                label: label,
+                // Convertimos cada Float32Array a un Array normal para la serialización JSON
+                descriptors: descriptorsByLabel[label].map(d => Array.from(d))
+            }));
+
+            const jsonString = JSON.stringify(dataToSave);
+            const blob = new Blob([jsonString], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'conocimiento_facial.json';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+
+            statusEl.innerText = 'Conocimiento guardado en "conocimiento_facial.json".';
+        });
+    </script>
+</body>
+</html>

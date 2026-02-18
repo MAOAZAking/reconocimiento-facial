@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Censura de Rostros</title>
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+    <style>
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; }
+        #container { max-width: 800px; text-align: center; }
+        #resultContainer { position: relative; margin-top: 20px; min-height: 200px; border: 2px solid black; }
+        #resultContainer img, #resultContainer canvas { max-width: 100%; height: auto; }
+        #resultContainer canvas { position: absolute; top: 0; left: 0; }
+        #status { margin: 15px 0; font-weight: bold; font-size: 1.2em; }
+        .blur { filter: blur(20px); }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; margin: 5px; }
+        #batchBtn { background-color: #4CAF50; color: white; border: none; }
+        #batchBtn:disabled { background-color: #cccccc; }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <h1>Fase 2: Censura Automática</h1>
+        
+        <div style="background-color: #f0f0f0; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+            <h3>Configuración</h3>
+            <p><strong>Paso 1:</strong> Carga el archivo <code>conocimiento_facial.json</code>.</p>
+            <p><small>Si el archivo está en la misma carpeta, se intentará cargar automáticamente.</small></p>
+            <input type="file" id="knowledgeUpload" accept=".json">
+        </div>
+
+        <div style="display: flex; gap: 20px; justify-content: center; flex-wrap: wrap;">
+            <div style="border: 1px solid #ccc; padding: 15px; border-radius: 8px; flex: 1; min-width: 300px;">
+                <h3>Opción A: Manual</h3>
+                <p>Sube una imagen individual para probar.</p>
+                <input type="file" id="imageUpload" accept="image/*" disabled>
+            </div>
+
+            <div style="border: 1px solid #ccc; padding: 15px; border-radius: 8px; flex: 1; min-width: 300px;">
+                <h3>Opción B: Automática (Lote)</h3>
+                <p>Procesa todas las fotos de <code>fotos_limpias</code> usando <code>file_list.json</code>.</p>
+                <button id="batchBtn" disabled>Procesar y Descargar Todo</button>
+            </div>
+        </div>
+
+        <div id="status" style="margin-top: 20px;">Cargando modelos de IA...</div>
+
+        <div id="resultContainer">
+            <canvas id="canvas"></canvas>
+        </div>
+        <div id="manualButtons" style="display:none; margin-top: 15px;">
+            <button id="downloadBtn" style="background-color: #2196F3; color: white; border: none;">Descargar (Navegador)</button>
+            <button id="saveServerBtn" style="background-color: #ff9800; color: white; border: none;">Guardar en Carpeta "fotos_censuradas"</button>
+        </div>
+        <p><small>Nota: Las imágenes se guardarán automáticamente en la carpeta "fotos_censuradas".</small></p>
+    </div>
+
+    <script>
+        const knowledgeUpload = document.getElementById('knowledgeUpload');
+        const imageUpload = document.getElementById('imageUpload');
+        const batchBtn = document.getElementById('batchBtn');
+        const canvas = document.getElementById('canvas');
+        const statusEl = document.getElementById('status');
+        const manualButtons = document.getElementById('manualButtons');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const saveServerBtn = document.getElementById('saveServerBtn');
+        
+        const MODEL_URL = 'models';
+        let faceMatcher = null;
+
+        // Función principal que se ejecuta al cargar la página
+        async function main() {
+            try {
+                statusEl.innerText = 'Cargando modelos de IA...';
+                knowledgeUpload.disabled = true;
+                imageUpload.disabled = true;
+                batchBtn.disabled = true;
+
+                await Promise.all([
+                    faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
+                    faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+                    faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+                ]);
+
+                statusEl.innerText = 'Modelos cargados. Buscando conocimiento facial...';
+                knowledgeUpload.disabled = false; 
+
+                // Intentar cargar conocimiento automáticamente si existe en la carpeta
+                try {
+                    const res = await fetch('conocimiento_facial.json');
+                    if (res.ok) {
+                        const data = await res.json();
+                        initFaceMatcher(data);
+                        statusEl.innerText = 'Sistema listo. Elige Opción A o B.';
+                    } else {
+                        statusEl.innerText = 'Por favor, sube el archivo conocimiento_facial.json (Paso 1).';
+                    }
+                } catch (e) { 
+                    statusEl.innerText = 'Por favor, sube el archivo conocimiento_facial.json (Paso 1).';
+                }
+
+            } catch (error) {
+                statusEl.innerText = 'Error fatal al cargar los modelos. Revisa la carpeta "models".';
+                console.error(error);
+            }
+        }
+        main();
+
+        function initFaceMatcher(data) {
+            const labeledFaceDescriptors = data.map(ld => {
+                const descriptors = ld.descriptors.map(d => new Float32Array(d));
+                return new faceapi.LabeledFaceDescriptors(ld.label, descriptors);
+            });
+            // Aumentamos la tolerancia a 0.65 para que sea más flexible reconociendo lo aprendido
+            faceMatcher = new faceapi.FaceMatcher(labeledFaceDescriptors, 0.65);
+            imageUpload.disabled = false;
+            batchBtn.disabled = false;
+            console.log("FaceMatcher inicializado");
+        }
+
+        knowledgeUpload.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    const data = JSON.parse(event.target.result);
+                    initFaceMatcher(data);
+                    statusEl.innerText = 'Conocimiento cargado manualmente. Sistema listo.';
+                } catch (error) {
+                    statusEl.innerText = 'Error al leer el archivo JSON.';
+                }
+            };
+            reader.readAsText(file);
+        });
+
+        // Lógica central de procesamiento
+        async function processImage(imageSource, filename, autoDownload = false) {
+            let image;
+            try {
+                if (imageSource instanceof File) {
+                    image = await faceapi.bufferToImage(imageSource);
+                } else {
+                    // Cargar desde URL (carpeta fotos_limpias)
+                    image = await faceapi.fetchImage(imageSource);
+                }
+            } catch (err) {
+                console.error("Error cargando imagen:", filename, err);
+                statusEl.innerText = `Error cargando ${filename}`;
+                return;
+            }
+
+            const ctx = canvas.getContext('2d');
+            canvas.width = image.width;
+            canvas.height = image.height;
+            ctx.drawImage(image, 0, 0);
+            manualButtons.style.display = 'none'; // Ocultar botones anteriores
+            
+            // Ajustamos minConfidence a 0.4 para detectar rostros más difíciles
+            // Si detecta demasiadas manos, sube este valor a 0.5
+            const detections = await faceapi.detectAllFaces(image, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.4 }))
+                .withFaceLandmarks()
+                .withFaceDescriptors();
+
+            if (detections.length === 0) {
+                if (!autoDownload) statusEl.innerText = 'No se encontraron rostros en ' + filename;
+                // Continuamos aunque no haya rostros para guardar la imagen original si es necesario
+            }
+
+            const results = detections.map(d => faceMatcher.findBestMatch(d.descriptor));
+
+            results.forEach((result, i) => {
+                const box = detections[i].detection.box;
+                // Verificamos si es niño (o nino por si acaso hay error de caracteres)
+                // IMPORTANTE: Si es 'unknown' (desconocido), también censuramos por seguridad
+                if (result.label === 'niño' || result.label === 'nino' || result.label === 'unknown') {
+                    // Aplicar censura (Pixelado)
+                    const pixelSize = 12; // Tamaño del cuadro del mosaico
+                    const w = Math.max(1, Math.floor(box.width / pixelSize));
+                    const h = Math.max(1, Math.floor(box.height / pixelSize));
+                    
+                    const tempCanvas = document.createElement('canvas');
+                    tempCanvas.width = w;
+                    tempCanvas.height = h;
+                    const tempCtx = tempCanvas.getContext('2d');
+                    
+                    // 1. Reducir la imagen (perder información)
+                    tempCtx.drawImage(image, box.x, box.y, box.width, box.height, 0, 0, w, h);
+                    
+                    // 2. Ampliarla de nuevo sin suavizado para crear el efecto pixelado
+                    ctx.save();
+                    ctx.imageSmoothingEnabled = false;
+                    ctx.mozImageSmoothingEnabled = false;
+                    ctx.webkitImageSmoothingEnabled = false;
+                    ctx.msImageSmoothingEnabled = false;
+                    ctx.drawImage(tempCanvas, 0, 0, w, h, box.x, box.y, box.width, box.height);
+                    ctx.restore();
+                }
+                // Eliminamos el 'else' para NO dibujar cajas azules en adultos
+            });
+
+            if (autoDownload) {
+                // Enviar al servidor para guardar
+                await saveToServer(filename, canvas.toDataURL('image/jpeg'));
+            } else {
+                statusEl.innerText = `Procesado: ${filename}. Rostros encontrados: ${results.length}`;
+                manualButtons.style.display = 'block';
+                
+                downloadBtn.onclick = () => {
+                    const link = document.createElement('a');
+                    link.download = 'censurada_' + filename;
+                    link.href = canvas.toDataURL('image/jpeg');
+                    link.click();
+                };
+                
+                saveServerBtn.onclick = () => {
+                    saveToServer(filename, canvas.toDataURL('image/jpeg'));
+                };
+            }
+        }
+
+        // Función para enviar la imagen al servidor Python
+        async function saveToServer(filename, imageData) {
+            try {
+                const response = await fetch('/save-image', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filename: 'censurada_' + filename, image: imageData })
+                });
+                if (response.ok) {
+                    statusEl.innerText = `Guardada en disco: censurada_${filename}`;
+                } else {
+                    statusEl.innerText = `Error al guardar ${filename}`;
+                }
+            } catch (error) {
+                console.error(error);
+                statusEl.innerText = `Error de conexión con server.py`;
+            }
+        }
+
+        // Evento para carga manual
+        imageUpload.addEventListener('change', async (e) => {
+            if (!faceMatcher) return alert('Carga primero el conocimiento.');
+            const file = e.target.files[0];
+            if (!file) return;
+            statusEl.innerText = 'Procesando imagen...';
+            await processImage(file, file.name, false);
+        });
+
+        // Evento para procesamiento por lotes
+        batchBtn.addEventListener('click', async () => {
+            if (!faceMatcher) return alert('Carga primero el conocimiento.');
+            
+            try {
+                statusEl.innerText = 'Leyendo lista de archivos...';
+                const response = await fetch('fotos_limpias/file_list.json');
+                if (!response.ok) throw new Error('No se encontró file_list.json en la carpeta fotos_limpias');
+                
+                const files = await response.json();
+                statusEl.innerText = `Se encontraron ${files.length} imágenes. Iniciando...`;
+                
+                for (let i = 0; i < files.length; i++) {
+                    const filename = files[i];
+                    statusEl.innerText = `Procesando imagen ${i + 1} de ${files.length}: ${filename}`;
+                    
+                    // Procesar y descargar automáticamente
+                    await processImage(`fotos_limpias/${filename}`, filename, true);
+                    
+                    // Pequeña pausa para dar tiempo al navegador
+                    await new Promise(r => setTimeout(r, 800));
+                }
+                statusEl.innerText = '¡Proceso finalizado! Revisa la carpeta "fotos_censuradas".';
+            } catch (error) {
+                statusEl.innerText = 'Error en el proceso por lotes: ' + error.message;
+                console.error(error);
+            }
+        });
+    </script>
+</body>
+</html>

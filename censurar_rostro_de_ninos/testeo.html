@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fase 3: Mejora de Conocimiento</title>
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+    <style>
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; background-color: #f5f5f5; }
+        #container { max-width: 900px; text-align: center; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        #imageWrapper { position: relative; margin: 20px auto; display: inline-block; border: 3px solid #333; }
+        #imageWrapper img { display: block; max-width: 100%; max-height: 600px; }
+        #imageWrapper canvas { position: absolute; top: 0; left: 0; cursor: pointer; }
+        
+        .controls { margin: 15px 0; padding: 15px; background: #eee; border-radius: 8px; }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; margin: 5px; border: none; border-radius: 5px; transition: background 0.3s; }
+        
+        #btnStart { background-color: #4CAF50; color: white; }
+        #btnNext { background-color: #2196F3; color: white; font-weight: bold; }
+        #btnDownload { background-color: #9C27B0; color: white; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        
+        .legend { display: flex; gap: 15px; justify-content: center; margin-top: 10px; font-size: 0.9em; }
+        .dot { width: 12px; height: 12px; display: inline-block; border-radius: 50%; margin-right: 5px; }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <h1>Fase 3: Testeo y Mejora Rápida</h1>
+        <p>Carga tu conocimiento actual. El sistema clasificará las fotos automáticamente.<br>
+        <strong>Haz clic en los recuadros de las caras para corregir si se equivoca.</strong></p>
+
+        <div class="controls">
+            <input type="file" id="knowledgeUpload" accept=".json">
+            <button id="btnStart" disabled>Cargar Imágenes e Iniciar</button>
+            <span id="fileStatus">Esperando archivo JSON...</span>
+            <div id="memoryStats" style="margin-top: 10px; color: #666;">Memoria: 0 niños, 0 adultos</div>
+        </div>
+
+        <div id="status" style="font-weight: bold; color: #555; margin: 10px 0;">Cargando modelos...</div>
+
+        <div id="workArea" style="display:none;">
+            <div id="imageWrapper">
+                <img id="imgDisplay">
+                <canvas id="canvas"></canvas>
+            </div>
+            
+            <div class="legend">
+                <span><span class="dot" style="background:blue;"></span>Niño</span>
+                <span><span class="dot" style="background:green;"></span>Adulto</span>
+                <span><span class="dot" style="background:red;"></span>Desconocido (Clic para asignar)</span>
+                <span><span class="dot" style="background:gray;"></span>Ignorar</span>
+            </div>
+
+            <div style="margin-top: 20px;">
+                <button id="btnNext">CONFIRMAR Y SIGUIENTE >></button>
+                <br><br>
+                <button id="btnDownload">Descargar Conocimiento Mejorado (.json)</button>
+            </div>
+            <p><small>Progreso: <span id="progressCounter">0/0</span></small></p>
+        </div>
+    </div>
+
+    <script>
+        const MODEL_URL = 'models';
+        let faceMatcher = null;
+        let knowledgeBase = []; // Almacena {label, descriptors[]}
+        let fileList = [];
+        let currentIndex = 0;
+        let currentDetections = []; // Detecciones de la imagen actual
+        let currentImageDescriptors = []; // Descriptores de la imagen actual
+
+        const statusEl = document.getElementById('status');
+        const imgDisplay = document.getElementById('imgDisplay');
+        const canvas = document.getElementById('canvas');
+        const btnStart = document.getElementById('btnStart');
+        const btnNext = document.getElementById('btnNext');
+        const btnDownload = document.getElementById('btnDownload');
+        const workArea = document.getElementById('workArea');
+        const progressCounter = document.getElementById('progressCounter');
+        const memoryStats = document.getElementById('memoryStats');
+
+        // 1. Cargar Modelos
+        async function loadModels() {
+            try {
+                await Promise.all([
+                    faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
+                    faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+                    faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+                ]);
+                statusEl.innerText = 'Modelos listos. Por favor carga conocimiento_facial.json';
+            } catch (e) {
+                statusEl.innerText = 'Error cargando modelos: ' + e;
+            }
+        }
+        loadModels();
+
+        // 2. Cargar JSON de conocimiento
+        document.getElementById('knowledgeUpload').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            const text = await file.text();
+            try {
+                const data = JSON.parse(text);
+                // Convertir arrays simples de vuelta a Float32Array para face-api
+                knowledgeBase = data.map(item => ({
+                    label: item.label,
+                    descriptors: item.descriptors.map(d => new Float32Array(d))
+                }));
+                
+                updateFaceMatcher();
+                updateStats();
+                document.getElementById('fileStatus').innerText = `Cargado: ${knowledgeBase.length} categorías.`;
+                btnStart.disabled = false;
+                statusEl.innerText = 'Conocimiento cargado. Listo para iniciar.';
+            } catch (err) {
+                alert('Error leyendo JSON: ' + err);
+            }
+        });
+
+        function updateFaceMatcher() {
+            if (knowledgeBase.length === 0) return;
+            const labeledDescriptors = knowledgeBase.map(kb => 
+                new faceapi.LabeledFaceDescriptors(kb.label, kb.descriptors)
+            );
+            // Usamos una tolerancia de 0.6 para el testeo
+            faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, 0.6);
+        }
+
+        function updateStats() {
+            const ninos = (knowledgeBase.find(k => k.label === 'niño') || { descriptors: [] }).descriptors.length;
+            const adultos = (knowledgeBase.find(k => k.label === 'adulto') || { descriptors: [] }).descriptors.length;
+            const otros = knowledgeBase.reduce((acc, k) => acc + (k.label !== 'niño' && k.label !== 'adulto' ? k.descriptors.length : 0), 0);
+            
+            memoryStats.innerText = `Memoria Activa: ${ninos} rostros de niños, ${adultos} de adultos.`;
+        }
+
+        // 3. Iniciar Proceso
+        btnStart.addEventListener('click', async () => {
+            try {
+                const res = await fetch('fotos_limpias/file_list.json');
+                if (!res.ok) throw new Error('No se encontró file_list.json');
+                fileList = await res.json();
+                
+                if (fileList.length === 0) return alert('La lista de archivos está vacía.');
+                
+                currentIndex = 0;
+                workArea.style.display = 'block';
+                btnStart.disabled = true;
+                loadNextImage();
+            } catch (err) {
+                alert(err.message);
+            }
+        });
+
+        // 4. Cargar y Procesar Imagen
+        async function loadNextImage() {
+            if (currentIndex >= fileList.length) {
+                statusEl.innerText = '¡Has revisado todas las imágenes!';
+                imgDisplay.src = '';
+                canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+                return;
+            }
+
+            const filename = fileList[currentIndex];
+            progressCounter.innerText = `${currentIndex + 1} / ${fileList.length}`;
+            statusEl.innerText = `Procesando: ${filename}...`;
+
+            imgDisplay.src = `fotos_limpias/${filename}`;
+            
+            imgDisplay.onload = async () => {
+                // Ajustar el canvas al tamaño visual de la imagen
+                const displaySize = { width: imgDisplay.width, height: imgDisplay.height };
+                faceapi.matchDimensions(canvas, displaySize);
+
+                const ctx = canvas.getContext('2d');
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                // Detectar
+                const detections = await faceapi.detectAllFaces(imgDisplay)
+                    .withFaceLandmarks()
+                    .withFaceDescriptors();
+
+                // Redimensionar las detecciones para que coincidan con el tamaño visual
+                const resizedDetections = faceapi.resizeResults(detections, displaySize);
+
+                // CORRECCIÓN IMPORTANTE: Usar los descriptores de la detección ORIGINAL (detections), 
+                // no de la redimensionada, para asegurar la máxima precisión.
+                // Mapeamos usando el índice 'i' para conectar la caja redimensionada con el descriptor original.
+
+                // Predecir etiquetas
+                currentDetections = resizedDetections.map((resizedDet, i) => {
+                    const originalDescriptor = detections[i].descriptor;
+                    const bestMatch = faceMatcher ? faceMatcher.findBestMatch(originalDescriptor) : { label: 'unknown' };
+                    let label = bestMatch.label;
+                    
+                    // Normalizar etiquetas
+                    if (label === 'unknown') label = 'unknown'; 
+                    
+                    return {
+                        box: resizedDet.detection.box,
+                        label: label, // 'niño', 'adulto', 'unknown', 'ignorar'
+                        descriptor: originalDescriptor // Guardamos el descriptor original de alta calidad
+                    };
+                });
+
+                drawResults();
+                statusEl.innerText = `Revisa las etiquetas. Haz clic en los recuadros para cambiar.`;
+            };
+        }
+
+        // 5. Dibujar y Gestionar Clics
+        function drawResults() {
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.lineWidth = 3;
+            ctx.font = 'bold 18px Arial';
+
+            currentDetections.forEach(det => {
+                const { x, y, width, height } = det.box;
+                let color = 'red'; // Unknown
+                if (det.label === 'niño' || det.label === 'nino') color = 'blue';
+                if (det.label === 'adulto') color = 'green';
+                if (det.label === 'ignorar') color = 'gray';
+
+                ctx.strokeStyle = color;
+                ctx.strokeRect(x, y, width, height);
+                
+                ctx.fillStyle = color;
+                ctx.fillRect(x, y - 25, width, 25);
+                ctx.fillStyle = 'white';
+                ctx.fillText(det.label, x + 5, y - 7);
+            });
+        }
+
+        canvas.addEventListener('click', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            // Calcular coordenadas reales considerando el escalado CSS si lo hubiera
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            const x = (e.clientX - rect.left) * scaleX;
+            const y = (e.clientY - rect.top) * scaleY;
+
+            let changed = false;
+            // Ciclo de etiquetas: unknown -> niño -> adulto -> ignorar -> niño...
+            const cycle = {
+                'unknown': 'niño',
+                'niño': 'adulto',
+                'nino': 'adulto',
+                'adulto': 'ignorar',
+                'ignorar': 'niño'
+            };
+
+            currentDetections.forEach(det => {
+                const b = det.box;
+                if (x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height) {
+                    det.label = cycle[det.label] || 'niño';
+                    changed = true;
+                }
+            });
+
+            if (changed) drawResults();
+        });
+
+        // 6. Confirmar y Aprender
+        btnNext.addEventListener('click', () => {
+            // Agregar los rostros confirmados a la base de conocimiento
+            let addedCount = 0;
+            currentDetections.forEach(det => {
+                if (det.label !== 'unknown' && det.label !== 'ignorar') {
+                    // Buscar si ya existe la categoría
+                    let category = knowledgeBase.find(k => k.label === det.label);
+                    if (!category) {
+                        category = { label: det.label, descriptors: [] };
+                        knowledgeBase.push(category);
+                    }
+                    // Agregar descriptor
+                    category.descriptors.push(det.descriptor);
+                    addedCount++;
+                }
+            });
+
+            if (addedCount > 0) {
+                console.log(`Aprendidos ${addedCount} nuevos rostros.`);
+                // Actualizar el matcher para que la siguiente foto sea más precisa
+                updateFaceMatcher();
+                updateStats();
+            }
+
+            currentIndex++;
+            loadNextImage();
+        });
+
+        // 7. Descargar JSON actualizado
+        btnDownload.addEventListener('click', () => {
+            // Convertir Float32Array a Array normal para JSON
+            const dataToSave = knowledgeBase.map(kb => ({
+                label: kb.label,
+                descriptors: kb.descriptors.map(d => Array.from(d))
+            }));
+
+            const blob = new Blob([JSON.stringify(dataToSave)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'conocimiento_mejorado.json';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        });
+
+    </script>
+</body>
+</html>
