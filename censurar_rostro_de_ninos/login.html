@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Iniciar Sesión</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #f0f2f5; margin: 0; }
+        .login-container { background: white; padding: 40px; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); width: 100%; max-width: 350px; text-align: center; }
+        h2 { margin-bottom: 20px; color: #333; }
+        input { width: 100%; padding: 12px; margin: 10px 0; border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; }
+        button { width: 100%; padding: 12px; background-color: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; font-weight: bold; }
+        button:hover { background-color: #0056b3; }
+        .error { color: red; margin-top: 10px; font-size: 14px; display: none; }
+    </style>
+</head>
+<body>
+
+<div class="login-container">
+    <h2>Acceso Restringido</h2>
+    <form id="loginForm">
+        <input type="text" id="username" placeholder="Usuario (admin)" required>
+        <input type="password" id="password" placeholder="Contraseña (admin)" required>
+        <button type="submit">Ingresar</button>
+    </form>
+    <div id="errorMsg" class="error">Usuario o contraseña incorrectos</div>
+</div>
+
+<script>
+    // Limpiar sesión anterior al entrar al login
+    sessionStorage.removeItem('authToken');
+    sessionStorage.removeItem('username');
+
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const user = document.getElementById('username').value;
+        const pass = document.getElementById('password').value;
+        const errorMsg = document.getElementById('errorMsg');
+
+        try {
+            const response = await fetch('/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: user, password: pass })
+            });
+
+            const data = await response.json();
+
+            if (response.ok && data.status === 'success') {
+                // Guardar token de sesión
+                sessionStorage.setItem('authToken', data.token);
+                sessionStorage.setItem('username', data.username); // Guardamos el usuario
+                window.location.href = 'dashboard.html';
+            } else {
+                errorMsg.style.display = 'block';
+                errorMsg.innerText = data.message || 'Error al iniciar sesión';
+            }
+        } catch (error) {
+            console.error(error);
+            errorMsg.style.display = 'block';
+            errorMsg.innerText = 'Error de conexión con el servidor';
+        }
+    });
+</script>
+
+</body>
+</html>

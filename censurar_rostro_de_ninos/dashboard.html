@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panel Seguro</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f8f9fa; margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; }
+        #content { display: none; text-align: center; padding: 40px; background: white; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); max-width: 600px; }
+        #biometric-prompt { text-align: center; padding: 30px; background: white; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        h1 { color: #28a745; }
+        .icon { font-size: 50px; margin-bottom: 20px; }
+        button { padding: 12px 24px; background-color: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; margin-top: 20px; }
+        button:hover { background-color: #0056b3; }
+        .logout { background-color: #dc3545; margin-top: 30px; }
+        .logout:hover { background-color: #c82333; }
+    </style>
+</head>
+<body>
+
+    <!-- Pantalla de solicitud biométrica -->
+    <div id="biometric-prompt">
+        <div class="icon">🔒</div>
+        <h2>Verificación de Identidad Requerida</h2>
+        <p>Para acceder a este contenido, necesitamos verificar que eres tú.</p>
+        <p id="status-msg">Iniciando verificación segura...</p>
+        <button id="btn-verify" style="display:none;" onclick="startBiometricAuth()">Usar Huella / Rostro</button>
+    </div>
+
+    <!-- Contenido protegido (oculto inicialmente) -->
+    <div id="content">
+        <div class="icon">✅</div>
+        <h1>Acceso Autorizado</h1>
+        <p>Bienvenido al sistema de gestión de reconocimiento facial.</p>
+        <p>Has validado tu sesión y tu identidad biométrica correctamente.</p>
+        
+        <div style="margin-top: 20px; padding: 15px; background: #e9ecef; border-radius: 5px;">
+            <strong>Estado del sistema:</strong> Activo<br>
+            <strong>Fotos procesadas:</strong> 0<br>
+            <a href="entrenamiento.html" style="display: inline-block; margin-top: 10px; color: #007bff; text-decoration: none;">Ir al Entrenamiento &rarr;</a>
+        </div>
+
+        <button class="logout" onclick="logout()">Cerrar Sesión</button>
+    </div>
+
+    <script>
+        // 1. Validar Sesión (Redirigir si no hay login previo)
+        const authToken = sessionStorage.getItem('authToken');
+        const username = sessionStorage.getItem('username');
+        if (!authToken || !username) {
+            window.location.href = 'login.html';
+        }
+
+        const promptDiv = document.getElementById('biometric-prompt');
+        const contentDiv = document.getElementById('content');
+        const statusMsg = document.getElementById('status-msg');
+
+        // Funciones para convertir entre ArrayBuffer y Base64
+        function bufferToBase64(buffer) {
+            const byteArray = new Uint8Array(buffer);
+            const byteString = byteArray.reduce((str, byte) => str + String.fromCharCode(byte), '');
+            return btoa(byteString);
+        }
+
+        // 2. Iniciar el flujo de autenticación biométrica al cargar la página
+        document.addEventListener('DOMContentLoaded', () => {
+            startBiometricAuth();
+        });
+
+        async function startBiometricAuth() {
+            if (!window.PublicKeyCredential) {
+                statusMsg.innerText = "Error: Tu navegador no soporta WebAuthn.";
+                return;
+            }
+            statusMsg.innerText = "Preparando autenticación...";
+
+            try {
+                // Paso 1: Pedir al servidor el challenge y las credenciales permitidas para este usuario
+                const responseStart = await fetch('/auth-start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username })
+                });
+                if (!responseStart.ok) throw new Error('Este usuario no tiene una huella registrada. Ve a register.html');
+
+                const options = await responseStart.json();
+                // Decodificar challenge y IDs de credenciales de base64 a ArrayBuffer
+                options.challenge = Uint8Array.from(atob(options.challenge), c => c.charCodeAt(0));
+                options.allowCredentials.forEach(cred => {
+                    cred.id = Uint8Array.from(atob(cred.id.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+                });
+
+                // Paso 2: Pedir al navegador que verifique la huella contra las credenciales permitidas
+                statusMsg.innerText = "Por favor, usa la huella que registraste...";
+                const assertion = await navigator.credentials.get({ publicKey: options });
+
+                // Paso 3: Enviar la "aserción" (prueba firmada) al servidor para su validación final
+                const assertionForServer = {
+                    id: assertion.id,
+                    rawId: bufferToBase64(assertion.rawId),
+                    type: assertion.type,
+                    response: {
+                        clientDataJSON: bufferToBase64(assertion.response.clientDataJSON),
+                        authenticatorData: bufferToBase64(assertion.response.authenticatorData),
+                        signature: bufferToBase64(assertion.response.signature),
+                        userHandle: assertion.response.userHandle ? bufferToBase64(assertion.response.userHandle) : null,
+                    },
+                };
+                
+                const responseFinish = await fetch('/auth-finish', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(assertionForServer)
+                });
+
+                if (!responseFinish.ok) throw new Error('La validación final en el servidor falló.');
+
+                // ¡Éxito! Mostrar el contenido
+                promptDiv.style.display = 'none';
+                contentDiv.style.display = 'block';
+            } catch (e) {
+                statusMsg.innerText = "Verificación fallida o cancelada. Intenta de nuevo.";
+                console.error(e);
+            }
+        }
+
+        function logout() {
+            sessionStorage.removeItem('authToken');
+            sessionStorage.removeItem('username');
+            window.location.href = 'login.html';
+        }
+    </script>
+</body>
+</html>

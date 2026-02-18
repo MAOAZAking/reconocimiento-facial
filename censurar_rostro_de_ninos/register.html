@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Registro Biométrico</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #f0f2f5; margin: 0; }
+        .container { background: white; padding: 40px; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); width: 100%; max-width: 400px; text-align: center; }
+        h2 { margin-bottom: 20px; color: #333; }
+        input { width: 100%; padding: 12px; margin: 10px 0; border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; }
+        button { width: 100%; padding: 12px; background-color: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; font-weight: bold; }
+        button:hover { background-color: #218838; }
+        button:disabled { background-color: #ccc; }
+        #status { margin-top: 15px; font-weight: bold; }
+        .note { font-size: 12px; color: #666; margin-top: 20px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Registrar Huella Dactilar</h2>
+    <p>Asocia una huella dactilar a un nombre de usuario.</p>
+    <form id="registerForm">
+        <input type="text" id="username" placeholder="Crea un usuario" required>
+        <input type="password" id="password" placeholder="Crea una contraseña" required>
+        <button id="registerButton" type="submit">Registrar Huella</button>
+    </form>
+    <div id="status"></div>
+    <p class="note">Asegúrate de que tu navegador soporta WebAuthn y tienes un sensor biométrico.</p>
+    <a href="login.html" style="display: block; margin-top: 20px;">Ir a Iniciar Sesión</a>
+</div>
+
+<script>
+    // Funciones para convertir entre ArrayBuffer y Base64 para poder enviarlo como JSON
+    function bufferToBase64(buffer) {
+        const byteArray = new Uint8Array(buffer);
+        const byteString = byteArray.reduce((str, byte) => str + String.fromCharCode(byte), '');
+        return btoa(byteString);
+    }
+
+    const registerForm = document.getElementById('registerForm');
+    const registerButton = document.getElementById('registerButton');
+    const usernameInput = document.getElementById('username');
+    const passwordInput = document.getElementById('password');
+    const statusDiv = document.getElementById('status');
+
+    registerForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const username = usernameInput.value;
+        const password = passwordInput.value;
+        if (!username || !password) {
+            statusDiv.textContent = 'Por favor, introduce un nombre de usuario.';
+            statusDiv.style.color = 'red';
+            return;
+        }
+
+        registerButton.disabled = true;
+        statusDiv.textContent = 'Iniciando registro...';
+        statusDiv.style.color = 'black';
+
+        try {
+            // 1. Pedir al servidor el "challenge" de registro
+            const responseStart = await fetch('/register-start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username })
+            });
+
+            if (!responseStart.ok) throw new Error('El servidor rechazó el inicio del registro.');
+            
+            const options = await responseStart.json();
+            // El servidor envía el challenge como base64, lo decodificamos a ArrayBuffer
+            options.challenge = Uint8Array.from(atob(options.challenge), c => c.charCodeAt(0));
+            options.user.id = Uint8Array.from(atob(options.user.id), c => c.charCodeAt(0));
+
+            // 2. Pedir al navegador que cree una credencial (esto activa el sensor de huella)
+            statusDiv.textContent = 'Por favor, usa tu huella dactilar...';
+            const credential = await navigator.credentials.create({ publicKey: options });
+
+            // 3. Enviar la nueva credencial pública al servidor para que la guarde
+            const credentialForServer = {
+                id: credential.id,
+                rawId: bufferToBase64(credential.rawId),
+                type: credential.type,
+                response: {
+                    clientDataJSON: bufferToBase64(credential.response.clientDataJSON),
+                    attestationObject: bufferToBase64(credential.response.attestationObject),
+                },
+            };
+
+            const responseFinish = await fetch('/register-finish', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password, cred: credentialForServer })
+            });
+
+            if (!responseFinish.ok) throw new Error('El servidor no pudo guardar la credencial.');
+
+            statusDiv.textContent = `¡Éxito! Huella registrada para el usuario '${username}'.`;
+            statusDiv.style.color = 'green';
+            usernameInput.value = '';
+            passwordInput.value = '';
+
+        } catch (err) {
+            console.error(err);
+            statusDiv.textContent = 'Error: ' + err.message;
+            statusDiv.style.color = 'red';
+        } finally {
+            registerButton.disabled = false;
+        }
+    });
+</script>
+
+</body>
+</html>
