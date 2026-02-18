@@ -67,7 +67,12 @@
                 body: JSON.stringify({ username })
             });
 
-            if (!responseStart.ok) throw new Error('El servidor rechazó el inicio del registro.');
+            if (responseStart.status === 409) {
+                throw new Error('ESTE USUARIO YA EXISTE. Por seguridad, no se permite registrar otra huella sin autorización.');
+            }
+            if (!responseStart.ok) {
+                throw new Error('Error del servidor al iniciar registro.');
+            }
             
             const options = await responseStart.json();
             // El servidor envía el challenge como base64, lo decodificamos a ArrayBuffer

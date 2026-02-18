@@ -101,6 +101,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             data = json.loads(post_data.decode('utf-8'))
             username = data['username']
 
+            # SEGURIDAD: Verificar si el usuario ya existe para evitar que otros
+            # registren sus huellas en cuentas ajenas.
+            with open(USERS_FILE, 'r') as f:
+                existing_users = json.load(f)
+            
+            if username in existing_users:
+                self.send_error(409, "El usuario ya existe. No se pueden registrar mas dispositivos publicamente.")
+                return
+
             challenge = base64.b64encode(os.urandom(32)).decode('utf-8')
             user_id = base64.b64encode(username.encode('utf-8')).decode('utf-8')
 
