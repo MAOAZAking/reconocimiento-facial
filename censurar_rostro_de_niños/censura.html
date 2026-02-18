@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Censura de Rostros</title>
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+    <style>
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; }
+        #container { max-width: 800px; text-align: center; }
+        #resultContainer { position: relative; margin-top: 20px; min-height: 200px; border: 2px solid black; }
+        #resultContainer img, #resultContainer canvas { max-width: 100%; height: auto; }
+        #resultContainer canvas { position: absolute; top: 0; left: 0; }
+        #status { margin: 15px 0; font-weight: bold; font-size: 1.2em; }
+        .blur { filter: blur(20px); }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <h1>Fase 2: Censura Automática</h1>
+        <p><strong>Paso 1:</strong> Carga el archivo <code>conocimiento_facial.json</code> que generaste en la fase de entrenamiento.</p>
+        <input type="file" id="knowledgeUpload" accept=".json">
+
+        <p style="margin-top: 20px;"><strong>Paso 2:</strong> Carga una imagen para detectar y censurar los rostros de niños.</p>
+        <input type="file" id="imageUpload" accept="image/*" disabled>
+
+        <div id="status">Esperando archivo de conocimiento...</div>
+
+        <div id="resultContainer">
+            <canvas id="canvas"></canvas>
+        </div>
+        <p><small>En una aplicación completa, la imagen censurada se guardaría en la carpeta "fotos_censuradas".</small></p>
+    </div>
+
+    <script>
+        const knowledgeUpload = document.getElementById('knowledgeUpload');
+        const imageUpload = document.getElementById('imageUpload');
+        const canvas = document.getElementById('canvas');
+        const statusEl = document.getElementById('status');
+
+        const MODEL_URL = './models';
+        let faceMatcher = null;
+
+        async function loadModels() {
+            await Promise.all([
+                faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
+                faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+                faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+            ]);
+        }
+        loadModels();
+
+        knowledgeUpload.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    const data = JSON.parse(event.target.result);
+                    const labeledFaceDescriptors = data.map(ld => {
+                        const descriptors = ld.descriptors.map(d => new Float32Array(d));
+                        return new faceapi.LabeledFaceDescriptors(ld.label, descriptors);
+                    });
+
+                    faceMatcher = new faceapi.FaceMatcher(labeledFaceDescriptors, 0.5);
+                    statusEl.innerText = 'Conocimiento cargado. Sube una imagen para censurar.';
+                    imageUpload.disabled = false;
+                } catch (error) {
+                    statusEl.innerText = 'Error al leer el archivo de conocimiento.';
+                    console.error(error);
+                }
+            };
+            reader.readAsText(file);
+        });
+
+        imageUpload.addEventListener('change', async (e) => {
+            if (!faceMatcher) {
+                alert('Por favor, carga primero el archivo de conocimiento.');
+                return;
+            }
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const image = await faceapi.bufferToImage(file);
+            const ctx = canvas.getContext('2d');
+            
+            statusEl.innerText = 'Procesando imagen...';
+
+            canvas.width = image.width;
+            canvas.height = image.height;
+            ctx.drawImage(image, 0, 0);
+
+            const detections = await faceapi.detectAllFaces(image)
+                .withFaceLandmarks()
+                .withFaceDescriptors();
+
+            if (detections.length === 0) {
+                statusEl.innerText = 'No se encontraron rostros.';
+                return;
+            }
+
+            const results = detections.map(d => faceMatcher.findBestMatch(d.descriptor));
+
+            results.forEach((result, i) => {
+                const box = detections[i].detection.box;
+                
+                // Si el modelo lo clasifica como 'niño', lo censuramos.
+                if (result.label === 'niño') {
+                    // Opción 1: Dibujar un rectángulo negro
+                    ctx.fillStyle = 'black';
+                    ctx.fillRect(box.x, box.y, box.width, box.height);
+
+                    // Opción 2: Aplicar un filtro de desenfoque (más complejo, requiere canvas por separado)
+                    // En este ejemplo, el rectángulo es más directo.
+                } else {
+                    // Opcional: Dibujar la predicción para adultos también
+                    const drawBox = new faceapi.draw.DrawBox(box, { label: result.toString() });
+                    drawBox.draw(canvas);
+                }
+            });
+
+            statusEl.innerText = `Procesamiento completo. Se encontraron ${results.length} rostros.`;
+        });
+    </script>
+</body>
+</html>
