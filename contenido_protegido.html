@@ -74,13 +74,35 @@
         let faceMatcher = null;
 
         async function start() {
-            const authorizedFaceJSON = sessionStorage.getItem('authorizedFace');
-            if (!authorizedFaceJSON) {
-                statusEl.innerText = "No hay rostro registrado. Redirigiendo...";
-                setTimeout(() => window.location.href = 'registro_facial.html', 2000);
+            let labeledFaceDescriptors = [];
+
+            try {
+                // Ahora se lee de un archivo físico, no de localStorage.
+                // 1. Cargar el manifiesto que lista todos los archivos de rostros.
+                const manifestResponse = await fetch('rostros_manifest.json');
+                if (!manifestResponse.ok) throw new Error("No se encontró 'rostros_manifest.json'.");
+                const faceFiles = await manifestResponse.json();
+
+                if (!Array.isArray(faceFiles) || faceFiles.length === 0) {
+                    throw new Error("El manifiesto está vacío o no es válido.");
+                }
+
+                // 2. Cargar cada archivo de rostro listado en el manifiesto.
+                const faceDataPromises = faceFiles.map(file => fetch(file).then(res => res.json()));
+                const allFacesData = await Promise.all(faceDataPromises);
+
+                // 3. Procesar todos los datos de rostros y crear los descriptores etiquetados.
+                labeledFaceDescriptors = allFacesData.map(faceData => {
+                    // Cada archivo contiene un objeto { label, descriptors }
+                    const descriptors = faceData.descriptors.map(d => new Float32Array(d));
+                    return new faceapi.LabeledFaceDescriptors(faceData.label, descriptors);
+                });
+
+            } catch (error) {
+                statusEl.innerText = `Error: ${error.message}. Por favor, genera los archivos desde la página de registro.`;
+                setTimeout(() => window.location.href = 'registro_facial.html', 4000);
                 return;
             }
-            const authorizedDescriptor = new Float32Array(Object.values(JSON.parse(authorizedFaceJSON)));
 
             statusEl.innerText = "Cargando modelos de IA...";
             await Promise.all([
@@ -89,8 +111,7 @@
                 faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
             ]);
             
-            const labeledFaceDescriptors = [new faceapi.LabeledFaceDescriptors('authorized', [authorizedDescriptor])];
-            faceMatcher = new faceapi.FaceMatcher(labeledFaceDescriptors, 0.5);
+            faceMatcher = new faceapi.FaceMatcher(labeledFaceDescriptors, 0.55);
 
             statusEl.innerText = "Iniciando cámara...";
             try {
@@ -117,18 +138,20 @@
                 canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
                 
                 let isAuthorized = false;
+                let userName = '';
                 if (detections.length > 0 && faceMatcher) {
                     const results = resizedDetections.map(d => faceMatcher.findBestMatch(d.descriptor));
                     results.forEach((result, i) => {
-                        if (result.label === 'authorized') {
+                        if (result.label !== 'unknown') {
                             isAuthorized = true;
+                            userName = result.label;
                         }
                     });
                 }
 
                 if (isAuthorized) {
                     bodyEl.classList.add('unlocked');
-                    statusEl.innerText = "Acceso Concedido";
+                    statusEl.innerText = `Hola ${userName}, Acceso Concedido`;
                     document.getElementById('videoContainer').style.borderColor = '#4CAF50';
                 } else {
                     bodyEl.classList.remove('unlocked');

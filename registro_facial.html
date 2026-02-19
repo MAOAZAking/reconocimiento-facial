@@ -37,11 +37,19 @@
 <body>
     <div id="container">
         <h1>Paso 1: Registrar un rostro</h1>
-        <p>Sube una foto clara o usa tu cámara para registrar a la persona autorizada.</p>
+        <p>Sube una foto clara o usa tu cámara. <strong>IMPORTANTE: Quítate las gafas para un registro válido.</strong></p>
         <div id="action-buttons">
             <button onclick="document.getElementById('imageUpload').click()">Subir Archivo</button>
             <button id="start-camera" onclick="startCamera()">Usar Cámara</button>
         </div>
+        <div id="management-section" style="margin-top: 20px; padding: 15px; border-top: 1px solid #ddd; background: #f9f9f9;">
+            <p style="font-weight: bold;">Paso 2: Generar archivos</p>
+            <p style="font-size:0.9em; color: #555;">Cada vez que registras un rostro, se descargará un archivo <code>rostro_autorizado_NOMBRE.json</code>. <strong>Debes mover cada uno a la carpeta del proyecto.</strong></p>
+            <p style="font-size:0.9em; color: #555; margin-top: 10px;">Cuando termines de añadir rostros, genera el archivo de manifiesto.</p>
+            <button onclick="generateManifest()" style="background-color:#007bff; color:white; border:none;">Generar Manifiesto de Rostros</button>
+            <button onclick="clearStorage()" style="background-color:#dc3545; color:white; border:none;">Borrar Todos los Rostros</button>
+        </div>
+
         <input type="file" id="imageUpload" accept="image/*" style="display:none">
         <div id="imageContainer">
             <video id="video" autoplay muted playsinline></video>
@@ -53,6 +61,7 @@
             <button onclick="takePicture()">Tomar Foto</button>
             <button onclick="cancelCamera()">Cancelar</button>
         </div>
+        <input type="text" id="nameInput" placeholder="Ingresa el nombre de la persona" style="display: none; padding: 10px; margin: 10px; width: 60%;">
         <button id="registerButton" style="display: none;" onclick="confirmarRegistro()">Confirmar Registro</button>
         <a id="linkProtegido" href="contenido_protegido.html">Acceder al contenido protegido</a>
     </div>
@@ -63,12 +72,14 @@
         const imagePreview = document.getElementById('imagePreview');
         const video = document.getElementById('video');
         const statusEl = document.getElementById('status');
+        const nameInput = document.getElementById('nameInput');
         const registerButton = document.getElementById('registerButton');
         const linkProtegido = document.getElementById('linkProtegido');
         const actionButtons = document.getElementById('action-buttons');
         const cameraControls = document.getElementById('camera-controls');
         const MODEL_URL = 'models';
         let stream = null;
+        let currentDescriptor = null;
 
         async function loadModels() {
             try {
@@ -96,9 +107,10 @@
                 return;
             }
 
-            sessionStorage.setItem('authorizedFace', JSON.stringify(detection.descriptor));
+            currentDescriptor = detection.descriptor;
             statusEl.innerText = 'Rostro detectado. ¡Listo para registrar!';
             registerButton.style.display = 'inline-block';
+            nameInput.style.display = 'inline-block';
             actionButtons.style.display = 'none';
         }
 
@@ -113,6 +125,7 @@
 
             linkProtegido.style.display = 'none';
             registerButton.style.display = 'none';
+            nameInput.style.display = 'none';
 
             imagePreview.onload = async () => {
                 analyzeImage(imagePreview);
@@ -130,9 +143,10 @@
                 imageContainer.classList.add('has-content');
                 actionButtons.style.display = 'none';
                 cameraControls.style.display = 'block';
-                statusEl.innerText = 'Posiciona el rostro y toma la foto.';
+                statusEl.innerText = 'Por favor, QUÍTATE LAS GAFAS y toma la foto.';
                 
                 registerButton.style.display = 'none';
+                nameInput.style.display = 'none';
                 linkProtegido.style.display = 'none';
             } catch (err) {
                 console.error("Error al acceder a la cámara: ", err);
@@ -171,10 +185,68 @@
         }
 
         function confirmarRegistro() {
-            statusEl.innerText = '¡Rostro registrado con éxito!';
+            if (!currentDescriptor) return;
+            const name = nameInput.value.trim();
+            if (!name) {
+                alert('Por favor, ingresa un nombre para registrar este rostro.');
+                return;
+            }
+
+            // 1. Guardar el nombre en una lista en localStorage para el manifiesto
+            const registeredNames = JSON.parse(localStorage.getItem('registeredFaceNames') || '[]');
+            if (!registeredNames.includes(name)) {
+                registeredNames.push(name);
+            }
+            localStorage.setItem('registeredFaceNames', JSON.stringify(registeredNames));
+
+            // 2. Crear el contenido del archivo JSON para este rostro.
+            // La estructura {label, descriptors} es para ser consistente con lo que espera el verificador.
+            const faceData = {
+                label: name,
+                descriptors: [Array.from(currentDescriptor)]
+            };
+            const jsonString = JSON.stringify(faceData, null, 2);
+            const blob = new Blob([jsonString], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `rostro_autorizado_${name}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+
+            statusEl.innerText = `Archivo 'rostro_autorizado_${name}.json' descargado. Muévelo a la carpeta del proyecto.`;
+
             registerButton.style.display = 'none';
+            nameInput.style.display = 'none';
             actionButtons.style.display = 'none';
+        }
+
+        function generateManifest() {
+            const registeredNames = JSON.parse(localStorage.getItem('registeredFaceNames') || '[]');
+            if (registeredNames.length === 0) {
+                alert('No hay rostros registrados en la memoria para crear un manifiesto.');
+                return;
+            }
+
+            const manifestData = registeredNames.map(name => `rostro_autorizado_${name}.json`);
+            const blob = new Blob([JSON.stringify(manifestData, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = "rostros_manifest.json";
+            a.click();
+            URL.revokeObjectURL(url);
+
+            statusEl.innerText = 'Archivo "rostros_manifest.json" descargado. ¡Muévelo a la carpeta del proyecto!';
             linkProtegido.style.display = 'block';
+        }
+
+        function clearStorage() {
+            if (confirm('ADVERTENCIA: ¿Estás seguro de que quieres borrar TODOS los nombres de rostros de la memoria del navegador?')) {
+                localStorage.removeItem('registeredFaceNames');
+                alert('La memoria de rostros ha sido borrada. La página se recargará.');
+                location.reload();
+            }
         }
     </script>
 </body>
