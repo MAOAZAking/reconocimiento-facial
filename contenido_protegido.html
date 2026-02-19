@@ -202,28 +202,27 @@
                 } else {
                     // --- LÓGICA DE RECONOCIMIENTO FACIAL ---
                     // Ahora sí, corremos la detección completa con descriptores
-                    const detection = await faceapi.detectSingleFace(video).withFaceLandmarks().withFaceDescriptor();
+                    const detection = await faceapi.detectSingleFace(video, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 })).withFaceLandmarks().withFaceDescriptor();
+                    let isAuthorized = false;
+                    let userName = '';
 
-                    if (detection && faceMatcher) {
+                    if (detection && faceMatcher) { // Si se detecta un rostro
                         const bestMatch = faceMatcher.findBestMatch(detection.descriptor);
                         if (bestMatch.label !== 'unknown') {
-                            bodyEl.classList.add('unlocked');
-                            statusEl.innerText = `Hola ${bestMatch.label}, Acceso Concedido`;
-                            document.getElementById('videoContainer').style.borderColor = '#4CAF50';
-                        } else {
-                            // No autorizado, reseteamos la prueba de vida para un nuevo intento
-                            bodyEl.classList.remove('unlocked');
-                            statusEl.innerText = "Acceso Denegado";
-                            document.getElementById('videoContainer').style.borderColor = '#f44336';
-                            livenessVerified = false;
-                            totalBlinks = 0;
-                            blinkCounter = 0;
+                            isAuthorized = true;
+                            userName = bestMatch.label;
                         }
+                    }
+
+                    if (isAuthorized) {
+                        bodyEl.classList.add('unlocked');
+                        statusEl.innerText = `Hola ${userName}, Acceso Concedido`;
+                        document.getElementById('videoContainer').style.borderColor = '#4CAF50';
                     } else {
-                        // Si se pierde el rostro después de la prueba, reseteamos todo
+                        // Si NO está autorizado (porque no hay rostro, o es desconocido), reseteamos todo.
                         bodyEl.classList.remove('unlocked');
-                        statusEl.innerText = "Buscando un rostro...";
-                        document.getElementById('videoContainer').style.borderColor = 'white';
+                        statusEl.innerText = detection ? "Acceso Denegado" : "Buscando un rostro...";
+                        document.getElementById('videoContainer').style.borderColor = detection ? '#f44336' : 'white';
                         livenessVerified = false;
                         totalBlinks = 0;
                         blinkCounter = 0;
